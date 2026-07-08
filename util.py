@@ -2,6 +2,8 @@
 import chromadb
 from datetime import datetime
 from openai import OpenAI
+import json
+import math
 
 client = chromadb.PersistentClient(path="./chroma_db")
 
@@ -24,6 +26,80 @@ with open("DOCUMENT_ID.txt", "r") as file:
 
 openai = OpenAI(api_key=key)
 
+
+def get_weather(city: str) -> str:
+    city_weather = {
+        "london": "Cloudy, 14°C",
+        "new york": "Sunny, 22°C",
+        "tokyo": "Rainy, 18°C",
+        "mumbai": "Humid, 32°C",
+        "bangalore": "Pleasant, 24°C",
+    }
+
+    return city_weather.get(city.lower(), f"The {city}'s weather cannot be determined!")
+
+def calculate(expr: str) -> str:
+    return eval(expr, {"__builtins__":{}}, {"sqrt": math.sqrt, "pow": math.pow})
+
+def get_capital(country: str) -> str:
+    country_capital = {
+        "india": "New Delhi",
+        "france": "Paris",
+        "japan": "Tokyo",
+        "usa": "Washington D.C.",
+        "germany": "Berlin",
+        "australia": "Canberra",
+    }
+    return country_capital.get(country.lower(), f"{country}'s Capital cannot be defined!")
+
+
+TOOLS = [{
+    "type": "function",
+    "name": "get_weather",
+    "description": "Returns current weather info for a given city",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "city": {
+                "type": "string",
+                "description": "Name of the city for which the weather is to be fetched."
+            }
+        }
+    }
+},{
+    "type": "function",
+    "name": "calculate",
+    "description": "Evaluates  a math expression",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "expr": {
+                "type": "string",
+                "description": "Expression to be evaluated."
+            }
+        }
+    }
+}, {
+    "type": "function",
+    "name": "get_capital",
+    "description": "Returns the capital of a given country",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "country": {
+                "type": "string",
+                "description": "Country for which the capital is to be returned as output."
+            }
+        }
+    }
+}]
+
+TOOL_MAP = {
+    "get_weather": get_weather,
+    "calculate": calculate,
+    "get_capital": get_capital
+}
+
 def add_document_to_collection(text: str):
     global document_identifier
 
@@ -37,6 +113,7 @@ def add_document_to_collection(text: str):
             file.write(str(document_identifier))
         except:
             pass
+
 
 def get_relevant_documents(query: str):
     relevant_documents = collection.query(
@@ -72,6 +149,56 @@ def llm_chat(user_query: str):
     except Exception as e:
         print("Error while fetching llm response for user query it failed ,because of ", str(e))
         return None
+
+
+def agent_chat_with_tools(data: dict):
+    messages = []
+
+    query = data.get("query")
+
+    messages.append({"role":"user", "content":query})
+
+    resp = openai.responses.create(
+        model="gpt-4o-mini",
+        instructions="You are a helpful agent. Use tools when needed.",
+        input=messages,
+        tools=TOOLS
+    )
+    while True:
+        if "function_call" in [item.type for item in resp.output]:
+
+            messages = []
+
+            for item in resp.output:
+                if item.type == "function_call":
+                    funct_name = item.name
+                    funct_args = json.loads(item.arguments)
+
+                    print(f"Calling {funct_name} tool with args {funct_args}")
+
+                    tool_output = TOOL_MAP[str(funct_name)](**funct_args)
+
+                    print(f"Output for {funct_name} tool with args {funct_args}: ",tool_output)
+
+
+                    messages.append({
+                        "type": "function_call_output",
+                        "call_id": item.call_id,
+                        "output": tool_output
+                    })
+
+            resp = openai.responses.create(
+                model="gpt-4o-mini",
+                instructions="You are a helpful agent. Use tools when needed.",
+                input=messages,
+                previous_response_id=resp.id,
+                tools=TOOLS
+            )
+
+        else:
+            break
+
+    return resp.output_text
 
 
 

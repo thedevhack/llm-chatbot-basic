@@ -38,3 +38,12 @@ async def ingest(ingest_data: IngestModel):
     except Exception as e:
         return {"message": "Some error occurred!!", "requestStatus": 0, "error": str(e)}
 
+@app.post("/agent-chat")
+async def agent_chat(data: ChatModel):
+    try:
+        data_dict = data.model_dump()
+        agent_response = agent_chat_with_tools(data_dict)
+        return {"message": "LLM Response", "requestStatus": 1, "data": agent_response}
+    except Exception as e:
+        return {"message": "Some error occurred!!", "requestStatus": 0, "error": str(e)}
+
