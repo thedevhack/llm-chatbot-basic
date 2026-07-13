@@ -4,6 +4,26 @@ from datetime import datetime
 from openai import OpenAI
 import json
 import math
+import logging
+import time
+from langsmith import traceable
+
+import os
+print("LANGSMITH_API_KEY:", os.environ.get("LANGSMITH_API_KEY"))
+print("LANGSMITH_TRACING:", os.environ.get("LANGSMITH_TRACING"))
+print("LANGSMITH_PROJECT:", os.environ.get("LANGSMITH_PROJECT"))
+
+# from Week3 import total_token_used
+from custom_logger import JSONLogger
+
+json_logger = JSONLogger(__name__, "structured_server.log")
+
+logging.basicConfig(filename="server.log",
+                    level=logging.INFO,
+                    format="%(asctime)s- %(levelname)s - %(message)s"
+                    )
+
+logger = logging.getLogger(__name__)
 
 client = chromadb.PersistentClient(path="./chroma_db")
 
@@ -124,7 +144,7 @@ def get_relevant_documents(query: str):
     print(relevant_documents)
     return relevant_documents["documents"][0]
 
-
+@traceable(name="llm_chat")
 def llm_chat(user_query: str):
     try:
         relevant_documents = get_relevant_documents(user_query)
@@ -150,12 +170,18 @@ def llm_chat(user_query: str):
         print("Error while fetching llm response for user query it failed ,because of ", str(e))
         return None
 
-
+@traceable(name="agent_chat_with_tools")
 def agent_chat_with_tools(data: dict):
+
+    startTime = time.time()
     messages = []
 
     query = data.get("query")
 
+    # logger.info(f"REQUEST | QUERY: {query}")
+
+    json_logger.log(event="REQUEST",
+                    query=query)
     messages.append({"role":"user", "content":query})
 
     resp = openai.responses.create(
@@ -175,10 +201,16 @@ def agent_chat_with_tools(data: dict):
                     funct_args = json.loads(item.arguments)
 
                     print(f"Calling {funct_name} tool with args {funct_args}")
-
+                    tool_startTime = time.time()
                     tool_output = TOOL_MAP[str(funct_name)](**funct_args)
+                    # logger.info(F"TOOL_OUTPUT | QUERY {query} | tool_name {funct_name} | tool_args {funct_args} | tool_time_taken {time.time() - tool_startTime}s")
 
-                    print(f"Output for {funct_name} tool with args {funct_args}: ",tool_output)
+                    json_logger.log(event="tool_call",
+                                    tool_name=funct_name,
+                                    tool_args=funct_args,
+                                    total_tool_output_time_taken=f"{time.time() - tool_startTime}s")
+
+                    # print(f"Output for {funct_name} tool with args {funct_args}: ",tool_output)
 
 
                     messages.append({
@@ -197,6 +229,12 @@ def agent_chat_with_tools(data: dict):
 
         else:
             break
+
+    total_tokens = resp.usage.total_tokens
+    # logger.info(f"RESPONSE | TOTAL TOKENS USED {total_tokens} | total_time_taken {time.time() - startTime}s")
+    json_logger.log(event="RESPONSE",
+                    total_token_used=total_tokens,
+                    total_time_taken_request=f"{time.time()-startTime}s")
 
     return resp.output_text
 
